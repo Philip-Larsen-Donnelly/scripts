@@ -72,12 +72,23 @@ readonly app_repos=(
     "git@github.com:dhis2/menu-management-app.git"
     "git@github.com:dhis2/messaging-app.git"
     "git@github.com:dhis2/pivot-tables-app.git"
+    "git@github.com:dhis2/reports-app.git"
     "git@github.com:dhis2/scheduler-app.git"
     "git@github.com:dhis2/settings-app.git"
     "git@github.com:dhis2/tracker-capture-app.git"
     "git@github.com:dhis2/translations-app.git"
+    "git@github.com:dhis2/usage-analytics-app.git"
     "git@github.com:dhis2/user-app.git"
     "git@github.com:dhis2/user-profile-app.git"
+)
+
+# Array of repos that handle version compatibility by
+# feature toggling. These apps are developed on the master branch.
+# The array is a subset of app_repos
+readonly toggling_app_repos=(
+    "git@github.com:dhis2/messaging-app.git"
+    "git@github.com:dhis2/reports-app.git"
+    "git@github.com:dhis2/usage-analytics-app.git"
 )
 
 
@@ -134,10 +145,16 @@ function get_new_master {
 
 function app_branch_name {
     # turns 2.31 or 2.31.1.12.23.3 into `v31`
+    # unless it is a feature-toggling app; in which case the branch is aways master
 
-    local RHS=${REL_VERSION#*.}
-    local LHS=${RHS%%.*}
-    echo "v${LHS}"
+    if [[ " ${toggling_app_repos[@]} " =~ " $1 " ]]; then
+        echo "master"
+    else
+        local RHS=${REL_VERSION#*.}
+        local LHS=${RHS%%.*}
+        echo "v${LHS}"
+    fi
+
 }
 
 function core_branch_name {
@@ -151,11 +168,11 @@ function release_apps {
     # creates release branch and tag
     # pushes to remote
 
-    local branch=$(app_branch_name)
     local tag=$(app_tag_name)
 
     for app in "${app_repos[@]}"
     do
+        local branch=$(app_branch_name "$app")
         local name=$(app_name "$app")
         local path="${TEMP}/${name}"
 
@@ -186,7 +203,6 @@ function release_core {
     local branch="$(core_branch_name)"
     local tag=$(app_tag_name)
     local pkg_path="./dhis-2/dhis-web/dhis-web-apps"
-    local app_branch=$(app_branch_name)
     local snapshot_branch="<version>${branch}-SNAPSHOT</version>"
     local snapshot_version="<version>${REL_VERSION}-SNAPSHOT</version>"
     local tag_version="<version>${tag}</version>"
@@ -244,22 +260,18 @@ function release_core {
 
     create_tag "$tag"
 
-    # updates all app version refs to release branch
-	jq --exit-status "(.|= (
-		.|map(
-            . |=
-                if .|contains(\"#\") then
-                    .|sub(\"#.*$\"; \"#${app_branch}\")
-                else
-                    .+\"#${app_branch}\"
-                end
-		)
-	))" "${pkg_path}/apps-to-bundle.json" > "${pkg_path}/apps-to-bundle.json.mod"
-    mv "${pkg_path}/apps-to-bundle.json.mod" "${pkg_path}/apps-to-bundle.json"
+    # updates all app version refs to tracking branch (either release or master)
+    for app in "${app_repos[@]}"
+    do
+          local app_no_ext=${app%.git}
+          local app_clean=${app_no_ext##*/}
+          local app_branch=$(app_branch_name "$app")
+          sed -i "s/\/${app_clean}.*""/\/${app_clean}#${app_branch}/" "${pkg_path}/apps-to-bundle.json"
+    done
 
     # commits to release branch
     git add "${pkg_path}/apps-to-bundle.json"
-    git commit -m "chore: set apps to track branch ${app_branch}"
+    git commit -m "chore: set apps to track correct branches"
     # update the mvn versions to next snapshot
     local find=$(unregex "$tag_version")
     local replace=$(unregex "$next_snapshot_version")
